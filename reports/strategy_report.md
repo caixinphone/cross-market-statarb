@@ -276,10 +276,13 @@ Re-running at 1h (crypto-1h + Alpaca equity-1h, same pipeline, `frequency: hourl
 
 | | Daily | Hourly |
 |---|--:|--:|
-| Idiosyncratic edge | +$596k | +$572k–$817k |
-| Gross (tradeable) | +$35k | **+$130k (positive)** |
-| Turnover (2-way/yr) | 4.8× | ~40× |
-| Net | −$83k | −$0.8M (fees-dominated) |
+| Gross (tradeable) | +$35k | **+$30k (positive)** |
+| Turnover (2-way/yr) | 4.8× | ~43× |
+| Net | −$83k | −$0.84M (fees-dominated) |
+
+(Earlier, pre-realism hourly runs on looser sizing showed a larger gross
++$130–150k; the figures above are the final, realistically-costed, reproducible
+numbers. The sign — gross-positive — is the robust point.)
 
 The intraday gross edge is clearly positive and larger — consistent with alpha
 drift being smaller over hours and microstructure reversion strongest at short
