@@ -38,6 +38,11 @@ def _config_for_synth():
     cfg.raw["factors"] = ["BTC", "QQQ"]
     cfg.raw["factor_map"]["crypto_equities"] = ["BTC", "QQQ"]
     cfg.raw["factor_overrides"] = {}
+    # Pin small windows so the test is independent of the production default
+    # (the hourly track uses 420; this 400-bar synthetic panel needs a short one).
+    cfg.raw["factor_model"]["rolling_window"] = 60
+    cfg.raw["factor_model"]["min_obs"] = 40
+    cfg.raw["signals"]["zscore_window"] = 60
     return cfg
 
 

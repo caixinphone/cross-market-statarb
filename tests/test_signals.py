@@ -31,6 +31,11 @@ def _cfg():
     cfg.raw["factors"] = ["BTC"]
     cfg.raw["factor_map"]["crypto_equities"] = ["BTC"]
     cfg.raw["factor_overrides"] = {}
+    # Pin small windows so the test is independent of the production default
+    # (the hourly track uses 420; this 500-bar synthetic panel needs a short one).
+    cfg.raw["factor_model"]["rolling_window"] = 60
+    cfg.raw["factor_model"]["min_obs"] = 40
+    cfg.raw["signals"]["zscore_window"] = 60
     return cfg
 
 

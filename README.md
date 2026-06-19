@@ -22,15 +22,16 @@ pip install -e .                 # pinned deps from pyproject.toml
 python scripts/download_data.py  # fetch + cache raw data, build aligned panel
 python scripts/run_backtest.py   # factor model -> signals -> portfolio -> metrics
 python scripts/sensitivity.py    # parameter / cost / capacity grids -> reports/
-pytest -q                        # 12 tests: lookahead, risk, costs, execution, signals
+pytest -q                        # 16 tests: lookahead, risk, costs+fees, funding, execution, signals
 ```
 
 Everything is driven by [`config/config.yaml`](config/config.yaml) — universe,
 factor map, signal thresholds, risk caps, and costs — so sensitivity/cost/
-capacity analyses are config-only, no code edits. Switch `frequency: daily|hourly`
-to flip between the mandatory daily backtest and the hourly bonus (both run off the
-same 1h cache). See **[reports/strategy_report.md](reports/strategy_report.md)** for
-the full write-up.
+capacity analyses are config-only, no code edits. The **primary track is hourly**
+(`frequency: hourly`, the default); switch `frequency: daily` to reproduce the
+daily comparison (both run off the same 1h cache). Bar-count windows are set in the
+hourly track's units (the daily calendar convention × 7 RTH bars/day). See
+**[reports/strategy_report.md](reports/strategy_report.md)** for the full write-up.
 
 ## Architecture
 
@@ -64,10 +65,11 @@ the full write-up.
 * **Backtest framing.** Binance's TradFi perps did not exist back to 2023, so the
   equity legs use real US-equity prices and the crypto legs use Binance;
   "Binance cross-market" is the execution thesis, not the historical data source.
-* **Alignment.** Both daily and hourly panels derive from the **same 1h cache**.
-  Daily price = the last 1h bar at/before the US-close snapshot (21:00 UTC) on the
-  equity trading calendar; hourly joins on the RTH core (14:00–20:00 UTC). A ≤1h
-  DST offset is immaterial at daily frequency.
+* **Alignment.** The hourly (primary) and daily (comparison) panels derive from
+  the **same 1h cache**. Hourly joins on the equity RTH core (14:00–20:00 UTC, 7
+  bars/day) with crypto reindexed onto those stamps; daily price = the last 1h bar
+  at/before the US-close snapshot (21:00 UTC) on the equity trading calendar. A ≤1h
+  DST offset is immaterial.
 * **Survivorship / ticker changes** handled via config (`delistings`,
   `symbol_overrides`); a pre-listing gap is absent, not back-filled (e.g. ARB/OP
   before their 2023 launch). **POL** is the MATIC→POL rebrand: Binance's
@@ -79,17 +81,23 @@ the full write-up.
 
 ## Methodology highlights
 
+* **Calendar-equivalent windows (hourly track).** Bar-count windows use the daily
+  Avellaneda-Lee convention × 7 RTH bars/day: factor/z-score window 420 (≈60
+  trading days), max-hold 140 (≈20 days). Using raw 60 hourly bars (≈8.5 days)
+  would be far too short and fabricate turnover — the central methodological point.
 * **No lookahead.** Betas/residuals at `t` use a trailing window ending at `t`;
   the engine executes signals on `t+1` (`positions.shift(1)`). Enforced by
   `tests/test_no_lookahead.py` (perturbing future bars cannot change past
   signals).
 * **Stationarity gate.** Every residual is ADF-tested; the strategy only has an
-  edge where the residual mean-reverts.
+  edge where the residual mean-reverts (all 25 stationary, ADF p≈0).
 * **Equal-vol sizing.** `N_i = (target_vol / σ_resid_i) · AUM/n_signals`.
 * **Risk caps** (all verified to bind/hold): per-asset ≤3%, sector ≤15%, gross
   leverage ≤3×, net factor exposure ≤5% of AUM.
-* **Costs.** Perp taker fee + slippage on traded notional, USDⓈ-M funding (real
-  series), and short-equity borrow.
+* **Costs.** Per-leg taker fee (equity = spot 0.10%, crypto = perp 0.04%) +
+  liquidity slippage on traded notional, USDⓈ-M funding (real 8h series, accrued
+  per-bar with overnight settlements rolled onto the next session's first RTH bar),
+  and short-equity borrow — each leg's fee, funding/borrow kept self-consistent.
 
 ## Reproducibility
 
@@ -97,39 +105,47 @@ Pinned deps in `pyproject.toml`; global seed in config; downloads cached and
 idempotent (delete `data/raw` / `data/processed` to force a clean rebuild). The
 pipeline is deterministic — re-running yields identical results.
 
-## Key findings (daily, full 25-asset universe, 2023→2026)
+## Key findings (hourly, full 25-asset universe, 2023→2026)
 
 Full write-up: **[reports/strategy_report.md](reports/strategy_report.md)**.
 `run_backtest.py` prints a PnL decomposition that separates *where the edge is*
-from *what eats it*. All risk caps hold; net beta to every factor ≈ 0.
+from *what eats it*. All risk caps hold (gross 0.27×, asset 3.0%, net-factor 4.8%);
+net beta to every factor ≈ 0. Panel: 5944 hourly bars × 29 columns.
 
 | Component | PnL ($) |
 |---|--:|
-| Idiosyncratic edge `Σ held·ε` | **+595,924** |
-| Alpha-drift + hedge-error | **−560,680** |
-| Gross (tradeable) | +35,244 |
-| Fees / funding / borrow | −118,185 |
-| **Net** | **−82,941** |
+| Idiosyncratic edge `Σ held·ε` | **+599,187** |
+| Alpha-drift + hedge-error | **−547,306** |
+| Gross (tradeable) | +51,881 |
+| Fees+slippage / funding / borrow | −234,654 |
+| **Net** | **−182,772** |
 
-Headline: Sharpe −0.20, CAGR −0.25%, vol 1.2%, max DD −2.4%, turnover 4.8×/yr.
+Headline: Sharpe −0.44, CAGR −0.55%, vol 1.24%, max DD −3.10%, turnover 6.2×/yr,
+avg hold ≈109 bars (~15.6 trading days). Fees split by venue: equity legs at
+Binance spot taker 0.10%, crypto legs at perp taker 0.04%.
 
-* The **idiosyncratic reversion edge is real and large** (+$596k gross), but a
+* The **idiosyncratic reversion edge is real and large** (+$599k gross), but a
   **market-neutral residual-reversion book is implicitly short idiosyncratic
   momentum** — shorting high-drift names in a 2023-25 bull market bleeds the drift
-  the in-sample residual removes but a real β-hedge cannot (−$561k). This drag,
+  the in-sample residual removes but a real β-hedge cannot (−$547k). This drag,
   larger than costs, is the central finding.
-* **It is stronger intraday** (hourly gross turns clearly positive) but there
-  **turnover/fees** bind instead — the mirror image of the daily picture.
-* **Capacity is not the limit at daily frequency:** Sharpe is flat from $10M→$200M
-  (huge ADVs; impact-light). The ceiling is *edge*, not liquidity.
-* **Honest verdict:** thin, parameter-sensitive, net-marginal at daily frequency
-  — a viable *component* of a diversified neutral book (esp. intraday with a
-  momentum overlay), not a standalone strategy. See the report for the full
-  sensitivity/capacity analysis and roadmap.
+* **Methodologically-correct hourly ≈ daily.** With calendar-equivalent 420-bar
+  windows the holding period is ~15 days and turnover is only 6.2×/yr — *not* the
+  43× of a naive 60-hourly-bar run. The edge/drift/net structure matches the daily
+  track (+$596k / −$561k / −$147k). More bars give steadier statistics, **not a
+  different strategy.**
+* **Capacity is not the limit:** Sharpe is flat from $10M→$200M (huge ADVs;
+  impact-light). The ceiling is *edge*, not liquidity.
+* **Honest verdict:** thin, parameter-sensitive, net-marginal — a viable
+  *component* of a diversified neutral book (esp. with a drift/momentum overlay),
+  not a standalone strategy. This is the **methodologically-corrected** hourly run;
+  turnover-control / profit tuning was deliberately *not* applied. See the report
+  for the full sensitivity/capacity analysis and roadmap.
 
 ## Roadmap (next steps)
 
-* **Drift/momentum overlay** (highest value): attack the −$561k alpha-drift drag.
-* **Intraday + turnover control**: the hourly gross edge is positive.
+* **Drift/momentum overlay** (highest value): attack the −$547k alpha-drift drag.
+* **Turnover control + profit tuning** (deliberately not applied here): higher
+  thresholds, wider no-trade band, maker fills, the net-positive 280-bar window.
 * OU s-score with κ-filter as primary signal; orthogonalised/PCA factors.
 * Dynamic factor selection (LASSO/stepwise); perp-vs-spot basis module.

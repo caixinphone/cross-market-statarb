@@ -6,7 +6,7 @@
 
 run:
   seed: 42
-  frequency: daily          # daily (mandatory deliverable) | hourly (bonus)
+  frequency: hourly         # hourly = primary track; daily available for comparison
   start: "2023-01-01"
   end: null                 # null => last complete month (resolved at runtime)
   data_dir: "data"
@@ -84,8 +84,11 @@ delistings: {}              # e.g. {FOO: "2024-03-01"}  (excluded after date)
 # Factor model (Task 2)
 # -----------------------------------------------------------------------------
 factor_model:
-  rolling_window: 60        # Avellaneda-Lee standard; sensitivity reported (60>90>120)
-  min_obs: 40               # minimum obs before a β is emitted
+  # Hourly track: bar-count windows are the DAILY calendar convention × 7 RTH
+  # bars/day, so the β-estimation horizon stays ~60 trading days (Avellaneda-Lee
+  # ~60-day standard), not 60 raw hourly bars (≈8.5 trading days, far too short).
+  rolling_window: 420       # 60 trading days × 7 RTH bars; sensitivity 420>630>840
+  min_obs: 280              # ~2/3 of the window before a β is emitted (40×7)
   adf_pvalue_max: 0.10      # residuals above this are flagged non-stationary
 
 # -----------------------------------------------------------------------------
@@ -97,13 +100,14 @@ signals:
   # resid_return = z-score of the daily residual return (literal task formula;
   #                short-term reversal)
   mode: resid_spread
-  zscore_window: 60         # trailing window for residual mean/std
+  zscore_window: 420        # trailing window for residual mean/std (60 days × 7)
   entry_threshold: 2.0
   exit_threshold: 0.5
-  max_holding_bars: 20      # forced exit (stale signal guard)
+  max_holding_bars: 140     # forced exit (stale signal guard); 20 days × 7
   # Mean-reversion-speed gate (Avellaneda-Lee): only open positions whose residual
   # AR(1) half-life is <= this many bars. null = off. Screens out slow/drifting
-  # names where idiosyncratic drift dominates over reversion.
+  # names where idiosyncratic drift dominates over reversion. (If enabled on the
+  # hourly track, scale ×7 vs the daily convention, e.g. HL 12 days -> ~84 bars.)
   max_half_life_bars: null  # baseline off; analysed as an enhancement in the report
 
 # -----------------------------------------------------------------------------
@@ -124,8 +128,10 @@ portfolio:
 # Costs (Task 4)
 # -----------------------------------------------------------------------------
 costs:
-  spot_fee_bps: 10.0        # Binance spot taker 0.10%
-  perp_fee_bps: 4.0         # Binance perp taker 0.04%
+  # Per-leg taker fee by venue: crypto legs = perp (pay funding), equity legs =
+  # spot (short borrows shares -> borrow cost). Both tiers are applied.
+  spot_fee_bps: 10.0        # Binance spot taker 0.10% -> equity legs
+  perp_fee_bps: 4.0         # Binance perp taker 0.04% -> crypto legs
   # Slippage: 'liquidity' = half-spread + square-root market impact scaled by the
   # trade's participation in rolling ADV; 'flat' = constant slippage_bps.
   slippage_model: liquidity

@@ -74,11 +74,13 @@ def main():
            f"Universe `{cfg.raw['active_universe']}`, frequency `{cfg.frequency}`, "
            f"{panel.returns.index[0].date()}–{panel.returns.index[-1].date()}.\n"]
 
+    # Bar-count sweeps are in the hourly track's units (daily convention × 7 RTH
+    # bars/day); threshold / vol / band / cost grids are frequency-independent.
     sweeps = {
         "entry_threshold": [1.5, 2.0, 2.5, 3.0],
         "exit_threshold": [0.25, 0.5, 1.0],
-        "max_half_life_bars": [None, 30, 20, 12, 8],
-        "zscore_window": [40, 60, 90],
+        "max_half_life_bars": [None, 210, 140, 84, 56],
+        "zscore_window": [280, 420, 630],
         "target_pair_vol": [0.10, 0.15, 0.20],
         "no_trade_band": [0.0, 0.0015, 0.005],
     }
@@ -93,9 +95,9 @@ def main():
             fm = fm_for(cfg.raw["factor_model"]["rolling_window"])
             out.append(_row(str(v), evaluate(cfg, panel, funding, fm)))
 
-    # rolling window (refits the factor model)
+    # rolling window (refits the factor model); hourly units (daily × 7)
     out.append(f"\n## factor rolling_window\n{HEADER}")
-    for w in [60, 90, 120]:
+    for w in [420, 630, 840]:
         cfg.raw = copy.deepcopy(base_raw)
         cfg.raw["factor_model"]["rolling_window"] = w
         out.append(_row(str(w), evaluate(cfg, panel, funding, fm_for(w))))

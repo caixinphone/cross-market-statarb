@@ -1,7 +1,7 @@
 """Performance metrics (Task 5).
 
 All annualisation uses periods-per-year from the run frequency (252 daily,
-252·6.5 hourly). Sharpe/Sortino assume a zero risk-free rate (the book is
+252·7 hourly — 7 RTH bars/day). Sharpe/Sortino assume a zero risk-free rate (the book is
 cash-neutral / market-neutral, so excess return ≈ return).
 """
 

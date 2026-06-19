@@ -16,7 +16,7 @@ import pandas as pd
 
 from ..config import Config
 from ..portfolio.construct import periods_per_year
-from .costs import (borrow_costs, daily_funding_frame, funding_costs,
+from .costs import (borrow_costs, funding_costs, per_bar_funding_frame,
                     trading_costs)
 
 
@@ -55,7 +55,7 @@ def run_backtest(
     equity = [i for i in instruments if cfg.asset_class_of(i) == "equity"]
 
     if cfg.get("costs", "apply_funding", default=True):
-        frate = daily_funding_frame(cfg, funding, returns.index, instruments)
+        frate = per_bar_funding_frame(cfg, funding, returns.index, instruments)
         fund_pnl = funding_costs(held, frate, crypto)
     else:
         fund_pnl = pd.Series(0.0, index=returns.index)
