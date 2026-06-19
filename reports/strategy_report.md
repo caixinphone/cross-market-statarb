@@ -1,357 +1,280 @@
-# Cross-Market Idiosyncratic Mean-Reversion — Strategy Report
+# 跨市场特质均值回归策略 —— 策略报告
 
-**A market-neutral statistical-arbitrage strategy across crypto and US-equity
-proxies, backtested 2023-01 → 2026-05.**
+**一个横跨加密与美股代理资产的市场中性统计套利策略,回测区间 2023-01 → 2026-05。**
 
 ---
 
-## 1. Executive summary
+## 1. 执行摘要
 
-We build and rigorously backtest an *idiosyncratic mean-reversion* statistical-
-arbitrage strategy spanning crypto (spot/perp) and US equities (crypto-equities,
-tech). Each asset is regressed on systematic factors (BTC, ETH, SPY, QQQ, SMH);
-the residual is traded back toward its mean while factor exposure is hedged out,
-so the book earns only the correction of short-term idiosyncratic mispricing.
+本策略构建并严格回测了一个**特质均值回归**统计套利策略,覆盖加密(现货/永续)与
+美股(币股、科技股)。每个资产对系统性因子(BTC、ETH、SPY、QQQ、SMH)做回归,
+交易其**特质残差**回归均值,同时对冲掉因子暴露,使组合只赚"短期特质定价错误被修正"
+的钱。
 
-**Headline (daily, full 25-asset universe, brief's ±2.0/0.5 thresholds):**
+**核心结果(日频、25 标的全资产池、题目建议的 ±2.0/0.5 阈值):**
 
-| Metric | Value |
+| 指标 | 数值 |
 |---|--:|
-| Annualised return (CAGR) | −0.25% |
-| Annualised volatility | 1.22% |
-| Sharpe | −0.20 |
-| Max drawdown | −2.4% |
-| Annual turnover (2-way) | 4.8× |
-| Net market beta (BTC/SPY/QQQ) | ≈ 0.00 |
+| 年化收益(CAGR) | −0.25% |
+| 年化波动 | 1.22% |
+| 夏普 | −0.20 |
+| 最大回撤 | −2.4% |
+| 年化换手(双边) | 4.8× |
+| 净市场 β(BTC/SPY/QQQ) | ≈ 0.00 |
 
-The honest conclusion up front: **the idiosyncratic reversion edge is real and
-large in gross terms (+$596k over the sample), but it is almost entirely offset
-by an alpha-drift / hedge-error drag (−$561k), leaving a thin positive gross
-(+$35k) that transaction costs (−$118k) turn slightly negative.** The strategy is
-*marginal and parameter-sensitive*, not a robust standalone money-maker at daily
-frequency on this universe. Its value — and the focus of this report — is the
-**diagnosis of where the alpha is and what destroys it**, supported by a
-realistic, auditable backtest engine.
+**开门见山的诚实结论:特质回归边际在毛利层面真实且巨大(全样本 +$596k),但几乎被
+"alpha 漂移 / 对冲误差"拖累(−$561k)完全抵消,剩下单薄的正毛利(+$35k),再被交易
+成本(−$118k)拖成微负。** 这个策略是**单薄且参数敏感的**,在日频、该资产池上并非一个
+稳健的独立赚钱策略。它的价值——也是本报告的重点——在于**清晰地诊断出 alpha 在哪里、
+又被什么吃掉**,并以一个真实、可审计的回测引擎为支撑。
 
-The three findings that matter most:
+最重要的三个发现:
 
-1. **The edge is structurally real but fights two frictions.** A 2σ residual
-   deviation reverts ~+2.3% over 10 days (event study). But shorting names *after*
-   they spike means shorting high-idiosyncratic-drift names in a 2023-25 bull
-   market — you bleed the drift the in-sample residual removes but a real hedge
-   cannot. This *alpha drift* is the dominant cost, larger than fees.
-2. **The edge is stronger intraday.** At hourly frequency the gross idiosyncratic
-   edge is ~3-4× larger; gross PnL is clearly positive. But turnover (~40×/yr)
-   makes fees the binding constraint there.
-3. **Capacity is not the binding constraint at daily frequency.** Sharpe is flat
-   from $10M to $200M AUM — the universe's daily dollar-volume (e.g. AAPL ~$5B,
-   MSTR ~$760M) dwarfs the trade sizes, so market impact is negligible. The
-   ceiling is *edge*, not liquidity.
+1. **边际结构性真实,但同时对抗两个摩擦。** 一个 2σ 的残差偏离在 10 天内回归约
+   +2.3%(事件研究)。但"在标的涨过头**之后**做空"意味着在 2023-25 牛市里做空高特质
+   漂移的标的——你会流失那部分"样本内残差剔除掉、但真实对冲无法剔除"的漂移。这个
+   **alpha 漂移**是最大的成本,比手续费还大。
+2. **边际在日内更强。** 小时频下特质毛利边际约为日频的 3-4 倍,毛利明确为正。但小时频
+   换手(~40×/年)使**手续费**成为约束。
+3. **日频下容量不是约束。** 夏普在 $10M 到 $200M 之间几乎不变——该资产池的日成交额
+   (如 AAPL ~$5B、MSTR ~$760M)远大于下单规模,市场冲击可忽略。天花板是**边际**,不是
+   流动性。
 
 ---
 
-## 2. Strategy thesis & economic rationale
+## 2. 策略思路与经济学逻辑
 
-**One sentence:** find assets that have moved too far from what their systematic
-factors justify, trade against the deviation, hedge the factors, and collect the
-mean-reversion.
+**一句话:** 找到那些已经偏离其系统性因子所能解释的合理位置的资产,反向交易这个偏离,
+对冲掉因子,赚取均值回归。
 
-**Why mispricings exist here.** Binance-style cross-market venues let
-retail-driven flow price crypto-equities (MSTR, COIN, miners) and tokenised/perp
-US names in the same 24/7 book as crypto. Retail over- and under-reaction to
-idiosyncratic news (a Saylor tweet, an earnings rumour, a miner's hash-rate
-report) pushes a name away from its factor-implied value faster than it pushes
-the factor itself. The decomposition
+**为什么这里会存在错误定价。** Binance 式跨市场场所让散户驱动的资金流在同一个 24/7
+账本里对币股(MSTR、COIN、矿企)和代币化/永续美股定价。散户对特质消息(Saylor 发推、
+财报传闻、矿企算力报告)的过度/不足反应,把单个标的推离其因子隐含价值的速度,快过它
+推动因子本身的速度。分解式
 
-```
-asset return = systematic (factor·β)  +  idiosyncratic (ε)
+```text
+资产收益 = 系统性(因子·β) + 特质(ε)
 ```
 
-isolates ε, the "asset's own story". When ε accumulates into an extreme
-deviation, the bet is that it reverts. Hedging the factors removes market
-direction, so the P&L depends only on the correction — *we do not predict
-BTC or the Nasdaq*.
+把 ε(资产"自己的故事")分离出来。当 ε 累积成极端偏离时,押注它会回归。对冲因子后
+组合方向中性,P&L 只取决于这个修正——**我们不预测 BTC 或纳指**。
 
-**Why it is plausibly an alpha and not a risk premium.** The residuals are
-short-horizon, idiosyncratic, and market-neutral; the return is uncorrelated with
-the factors by construction (verified: net beta ≈ 0). The economic source is
-liquidity provision to retail over-reaction — a capacity-limited but genuine edge.
+**为什么这大概率是 alpha 而非风险溢价。** 残差是短周期、特质、市场中性的;按构造其收益
+与因子不相关(已验证净 β≈0)。经济来源是为散户过度反应提供流动性——一个容量受限但真实
+的边际。
 
 ---
 
-## 3. Data & universe
+## 3. 数据与资产池
 
-| Layer | Source | Coverage |
+| 层 | 来源 | 覆盖 |
 |---|---|---|
-| Crypto spot/perp (1h) | `data.binance.vision` public archive | full 2023-01 → 2026-05 |
-| Perp funding (8h) | `data.binance.vision` futures/um | full |
-| US equities (1h) | Alpaca market-data API (IEX feed) | full 2023-01 → 2026-05 |
+| 加密现货/永续(1h) | `data.binance.vision` 公开归档 | 完整 2023-01 → 2026-05 |
+| 永续资金费率(8h) | `data.binance.vision` futures/um | 完整 |
+| 美股(1h) | Alpaca 行情 API(IEX feed) | 完整 2023-01 → 2026-05 |
 
-**Universe (25 tradeable + 5 factors).** Crypto-equities: MSTR, COIN, MARA, RIOT,
-CLSK, HOOD. Altcoins: ETH, SOL, BNB, ARB, OP, UNI, AAVE, LINK, AVAX, DOT, LTC,
-POL. Tech: NVDA, TSLA, AMD, META, AAPL, MSFT, AMZN. Factors: BTC, ETH, SPY, QQQ,
-SMH.
+**资产池(25 交易标的 + 5 因子)。** 币股:MSTR、COIN、MARA、RIOT、CLSK、HOOD。
+山寨币:ETH、SOL、BNB、ARB、OP、UNI、AAVE、LINK、AVAX、DOT、LTC、POL。
+科技股:NVDA、TSLA、AMD、META、AAPL、MSFT、AMZN。因子:BTC、ETH、SPY、QQQ、SMH。
 
-**Key data decisions and caveats (handled, not hidden):**
+**关键数据决策与说明(已处理,不回避):**
 
-- **Binance live API is geo-blocked (HTTP 451)** from the build location; we use
-  the official bulk archive, which is the better backtest source anyway (complete,
-  no rate limits). The archive switched timestamp units ms→µs in 2025 — normalised
-  per-element.
-- **Backtest framing.** Binance's TradFi perps did not exist back to 2023, so the
-  equity legs use real US-equity prices and crypto legs use Binance. "Binance
-  cross-market" is the execution thesis, not the historical data source.
-- **Equity feed.** Alpaca's free tier is the IEX feed (a volume subset); OHLC for
-  liquid names is representative, volumes are IEX-only and scaled ×25 to a
-  consolidated-tape proxy for the capacity/slippage model. SIP (full tape) needs a
-  paid plan.
-- **Survivorship / ticker changes.** Pre-listing gaps are absent, not back-filled
-  (ARB/OP launched in 2023). **POL** is the MATIC→POL rename: we stitch MATICUSDT
-  (pre-Sep-2024) + POLUSDT into one continuous series via a general `symbol_stitch`
-  mechanism; the ~3-day migration halt remains as honest missing data.
-- **Cross-market alignment.** Crypto trades 24/7, equities 6.5h. Daily bars are
-  snapshotted at the US close (last 1h bar ≤ 21:00 UTC) on the equity trading
-  calendar (weekend crypto drift folds into the Fri→Mon return). Hourly bars join
-  on the RTH core (14:00–20:00 UTC), where crypto and equity grids both align on
-  the clock hour. A ≤1h DST offset is immaterial at daily frequency. Both daily and
-  hourly panels derive from the **same 1h cache**, so they are mutually consistent.
+- **Binance 实时 API 被地域封锁(HTTP 451)**,改用官方批量归档——它本身就是更好的
+  回测数据源(完整、无限速)。归档在 2025 年把时间戳单位从 ms 改成 µs——已**逐元素**
+  归一化。
+- **回测设定。** Binance 的 TradFi 永续在 2023 年并不存在,所以股票腿用真实美股价格、
+  加密腿用 Binance。"Binance 跨市场"是执行论点,而非历史数据来源。
+- **股票数据源。** Alpaca 免费层是 IEX feed(成交量子集);流动标的的 OHLC 有代表性,
+  成交量只是 IEX 口径,在容量/滑点模型里按 ×25 放大成合并盘口代理。SIP(全盘)需付费。
+- **生存偏差 / 改名。** 上市前的缺口是真实缺失而非回填(ARB/OP 于 2023 上线)。**POL**
+  是 MATIC→POL 改名:用一个通用的 `symbol_stitch` 机制把 MATICUSDT(2024-09 前)与
+  POLUSDT 拼成一条连续序列;~3 天的迁移停盘保留为真实缺失。
+- **跨市场对齐。** 加密 24/7、美股 6.5h。日频在美股收盘(≤21:00 UTC 的最后一根 1h bar)
+  按美股交易日历快照(周末加密漂移折进周一收益)。小时频在 RTH 核心(14:00–20:00 UTC)
+  对齐,加密与股票网格都对齐到整点。≤1h 的夏令时偏移在日频下可忽略。**日频和小时频面板
+  都从同一份 1h 缓存派生**,因此互相一致。
 
 ---
 
-## 4. Factor model (Task 2)
+## 4. 因子模型(Task 2)
 
-For each asset we fit, on a trailing window, the linear model
-`r_i,t = α_i + Σ_f β_{i,f}·r_f,t + ε_i,t`. Factor sets are assigned by category:
-crypto-equities → BTC+QQQ, miners → BTC+SMH, L1 (ETH) → BTC, L2/DeFi → ETH+BTC,
-tech → QQQ+SMH.
+对每个资产在滚动窗口上拟合线性模型 `r_i,t = α_i + Σ_f β_{i,f}·r_f,t + ε_i,t`。因子集按
+类别分配:币股→BTC+QQQ,矿企→BTC+SMH,L1(ETH)→BTC,L2/DeFi→ETH+BTC,科技→QQQ+SMH。
 
-- **Window: 60 bars (Avellaneda-Lee standard).** Sensitivity (§9) shows 60 > 90 >
-  120: a shorter window adapts β faster and yields cleaner residuals; longer
-  windows stale the hedge. 60 is both the literature default and the empirical
-  best, so it is a defensible a-priori choice.
-- **Estimation is point-in-time.** β/ε at bar `t` use only the window ending at
-  `t`; the engine executes on `t+1`. A dedicated test perturbs future bars and
-  asserts past β/ε are byte-identical.
-- **Diagnostics.** Mean rolling R² ranges 0.38 (TSLA, idiosyncratic) to 0.69
-  (ETH/ARB/MSTR). **Every one of the 25 residual series is stationary** (ADF
-  p ≈ 0.00) — the mean-reversion premise holds universe-wide, which is the
-  precondition for the strategy to have any edge.
+- **窗口:60 bar(Avellaneda-Lee 标准)。** 敏感性(§9)显示 60 > 90 > 120:更短窗口让 β
+  适应更快、残差更"干净";更长窗口让对冲变陈旧。60 既是文献默认也是实测最优,是有依据
+  的先验选择。
+- **估计是时点安全的。** 第 `t` 根的 β/ε 只用结束于 `t` 的窗口;引擎在 `t+1` 执行。一个
+  专门的测试扰动未来 bar 并断言过去的 β/ε 逐字节不变。
+- **诊断。** 平均滚动 R² 从 0.38(TSLA,高特质)到 0.69(ETH/ARB/MSTR)。**25 条残差序列
+  全部平稳**(ADF p ≈ 0.00)——均值回归前提在全资产池成立,这是策略有任何边际的前提条件。
 
 ---
 
-## 5. Signal construction (Task 3)
+## 5. 信号构建(Task 3)
 
-- **Signal.** z-score of the *cumulative* residual `S_t = Σ ε` over a 60-bar
-  trailing window — i.e. how rich/cheap the price is versus its factor-implied
-  path (the Avellaneda-Lee residual-spread). This matches the economic narrative
-  better than z-scoring daily residual returns (which we verify is near-martingale:
-  lag-1 autocorr ≈ +0.01, no daily reversal edge; the *cumulative* spread reverts).
-- **Entry/exit (brief's suggestion).** Enter (fade) at |z|>2.0, exit at |z|<0.5,
-  with a sign-flip and a max-holding guard — a hysteresis state machine.
-- **Mean-reversion-speed filter (enhancement, Avellaneda-Lee).** We also implement
-  an AR(1) half-life gate: only open positions whose residual reverts within a set
-  number of bars (κ filter). It screens out slow/non-reverting names — exactly the
-  high-drift names that bleed alpha (§8). It improves gross PnL to positive but its
-  parameter interaction is unstable (§9), so it is **off in the baseline** and
-  reported as an analysed enhancement.
+- **信号。** 60 bar 滚动窗口上**累积**残差 `S_t = Σ ε` 的 z-score——即价格相对其因子隐含
+  路径有多贵/多便宜(Avellaneda-Lee 残差价差)。这比对日度残差收益做 z-score 更贴合经济
+  叙事(我们验证后者近乎鞅:一阶自相关 ≈ +0.01,无日度反转边际;而**累积**价差会回归)。
+- **进出场(题目建议)。** |z|>2.0 进场(反向),|z|<0.5 出场,带反号与最大持仓保护——
+  一个迟滞状态机。
+- **均值回归速度过滤(增强项,Avellaneda-Lee)。** 同时实现了 AR(1) 半衰期门控:只对回归
+  速度足够快(在设定 bar 数内回归)的标的开仓(κ 过滤)。它筛掉慢速/不回归的标的——
+  正是那些会流失 alpha 的高漂移标的(§8)。它把毛利推正,但其参数交互不稳定(§9),所以
+  **基线里关闭**,作为被分析的增强项呈现。
 
 ---
 
-## 6. Portfolio construction & risk (Task 3)
+## 6. 组合构建与风控(Task 3)
 
-- **Sizing: equal-volatility, fixed at entry.** `N_i = (target_vol / σ_resid_i) ·
-  AUM/n_signals`, σ_resid being the trailing idiosyncratic vol (the right risk
-  measure once factors are hedged). The notional is **frozen at entry** for the
-  life of the trade — a desk sets size when it puts a position on, not by
-  re-vol-targeting every bar (which would generate large fictitious turnover).
-- **Hedging built from constrained legs → factor-neutral by construction.** Factor
-  legs `= −Σ_i pos_i·β_{i,f}`.
-- **Risk caps (all verified to hold on the *actually-held* book):** single asset
-  ≤3% AUM, sector ≤15%, gross leverage ≤3×, **net factor exposure ≤5%**. The
-  per-asset cap is enforced by *uniform* down-scaling (not clipping), because
-  clipping a shared hedge leg would break neutrality. Realised net beta to every
-  factor is ≈ 0.00.
+- **定仓:等波动率,开仓即定。** `N_i = (目标波动 / σ_resid_i) · AUM/n_signals`,σ_resid 是
+  滚动特质波动(对冲掉因子后正确的风险度量)。仓位在**开仓时冻结**,持有期内不变——desk
+  在建仓时确定规模,而不是每根 bar 重新做波动率定标(那会产生大量虚假换手)。
+- **对冲由受约束后的腿构建 → 按构造因子中性。** 因子腿 `= −Σ_i pos_i·β_{i,f}`。
+- **风控上限(全部在*实际持仓*账本上验证成立):** 单一资产 ≤3% AUM、板块 ≤15%、总杠杆
+  ≤3×、**净因子暴露 ≤5%**。单资产上限通过*等比*缩放(而非裁剪)执行,因为裁剪共享对冲腿
+  会破坏中性。实现的对每个因子的净 β ≈ 0.00。
 
 ---
 
-## 7. Backtest engine & realistic execution (Task 4)
+## 7. 回测引擎与真实执行(Task 4)
 
-The engine is vectorised and strictly point-in-time: `held = positions.shift(1)` —
-a target formed at `t` is executed and earns on `t+1`. This one-bar lag is the
-whole no-lookahead guarantee and is enforced by tests.
+引擎是向量化且严格时点安全的:`held = positions.shift(1)`——在 `t` 形成的目标在 `t+1`
+执行并赚取收益。这一根 bar 的滞后就是整个无前视保证,并由测试强制。
 
-**Realistic frictions modelled:**
+**建模的真实摩擦:**
 
-- **Fees.** Binance perp taker 4 bps on traded notional.
-- **Slippage — liquidity model (not flat).** `base + impact·√participation`, where
-  `participation = trade$ / rolling ADV$` (square-root market-impact law). Thin
-  names (CLSK) cost more than mega-caps (AAPL). ADV uses real archive volume
-  (crypto) and IEX×25 (equity).
-- **Funding.** USDⓈ-M perp funding from the downloaded 8h series — *signed*, so a
-  short of a positive-funding perp earns a rebate (verified: funding is a credit on
-  333 bars).
-- **Borrow.** Short-equity borrow at 3%/yr annualised per bar.
-- **No-trade band.** Rebalance an instrument only when its target drifts >0.15% AUM
-  — a desk does not chase every tiny delta. This produces the *actually-held* book;
-  the net-factor cap is enforced at 90% to leave the band drift headroom.
+- **手续费。** Binance 永续 taker 4 bps,按成交名义额。
+- **滑点 —— 流动性模型(非固定)。** `base + impact·√participation`,其中
+  `participation = 成交额 / 滚动 ADV额`(平方根冲击律)。薄标的(CLSK)比大盘股(AAPL)
+  贵。ADV 用真实归档成交量(加密)与 IEX×25(股票)。
+- **资金费率。** USDⓈ-M 永续资金费,取自下载的 8h 序列——**带符号**,所以做空一个正
+  资金费永续会收到返还(已验证:333 根 bar 上资金费是正收益)。
+- **借券费。** 空头美股按 3%/年逐 bar 计提。
+- **免交易带。** 仅当目标漂移 >0.15% AUM 时才再平衡——desk 不会去追每一笔微小变动。
+  由此得到*实际持仓*账本;净因子上限按 90% 执行,为带内漂移留出余量。
 
-**Backtest-pitfall checklist (all addressed):** no lookahead (execution lag +
-test); no survivorship bias (pre-listing absent, delistings configurable); time
-alignment (single 1h cache, documented snapshot); costs fully modelled; results
-reconcile exactly (`equity = AUM + Σ net pnl`, max diff 0).
+**回测陷阱清单(全部处理):** 无前视(执行滞后 + 测试);无生存偏差(上市前缺失、退市可
+配置);时间对齐(单一 1h 缓存、快照有文档);成本完整建模;结果精确对账
+(`equity = AUM + Σ 净 pnl`,最大误差 0)。
 
 ---
 
-## 8. Results & the central finding
+## 8. 结果与核心发现
 
-**Performance (daily baseline):** Sharpe −0.20, CAGR −0.25%, vol 1.22%, max DD
-−2.4%, Calmar −0.10, win-rate 45%, profit factor 0.96, avg holding ~17 days,
-turnover 4.8×/yr. Annual net returns: 2023 −1.5%, 2024 +1.5%, 2025 −1.5%,
-2026 (H1) +0.6% — small and regime-dependent.
+**业绩(日频基线):** 夏普 −0.20,CAGR −0.25%,波动 1.22%,最大回撤 −2.4%,卡玛 −0.10,
+胜率 45%,盈亏比 0.96,平均持仓 ~17 天,换手 4.8×/年。年度净收益:2023 −1.5%、
+2024 +1.5%、2025 −1.5%、2026(上半年)+0.6%——小且依赖市场环境。
 
-**PnL decomposition — the heart of the analysis:**
+**PnL 分解 —— 分析的核心:**
 
-| Component | PnL ($) | Reading |
+| 组成 | PnL ($) | 解读 |
 |---|--:|---|
-| Idiosyncratic edge `Σ held·ε` | **+595,924** | the reversion edge is real and large |
-| Alpha-drift + hedge-error | **−560,680** | shorting drifting names + β-drift eat it |
-| **Gross (tradeable)** | **+35,244** | thin positive |
-| Fees | −83,793 | |
-| Funding | −5,931 | |
-| Borrow | −28,461 | |
-| **Net** | **−82,941** | costs tip it negative |
+| 特质边际 `Σ held·ε` | **+595,924** | 回归边际真实且巨大 |
+| alpha 漂移 + 对冲误差 | **−560,680** | 做空漂移标的 + β 漂移把它吃掉 |
+| **毛利(可交易)** | **+35,244** | 单薄正值 |
+| 手续费 | −83,793 | |
+| 资金费率 | −5,931 | |
+| 借券费 | −28,461 | |
+| **净** | **−82,941** | 成本把它压成微负 |
 
-**Why the alpha-drift drag exists.** The in-sample residual ε is mean-zero by
-construction — it removes the asset's intercept/drift (α). A real hedge can remove
-the *factor* exposure but **cannot remove the asset's own idiosyncratic drift**.
-The strategy systematically shorts names *after* they have risen (z>2). In a bull
-market those are precisely the names with persistent positive idiosyncratic drift,
-so the shorts pay that drift. Per-asset, the reversion edge is positive on most
-names (HOOD, AMZN, NVDA, AMD, AAVE…) but strongly negative on the hardest trenders
-(LINK, AVAX, TSLA, ETH, MSTR) — the signature of reversion fighting momentum.
+**为什么会有 alpha 漂移拖累。** 样本内残差 ε 按构造均值为零——它剔除了资产的截距/漂移
+(α)。真实对冲能去掉*因子*暴露,但**无法去掉资产自身的特质漂移**。策略系统性地在标的
+上涨**之后**做空(z>2)。牛市里这些正是有持续正特质漂移的标的,于是空头要付这部分漂移。
+逐标的看,回归边际在多数名字上为正(HOOD、AMZN、NVDA、AMD、AAVE…),但在最强趋势股上
+强烈为负(LINK、AVAX、TSLA、ETH、MSTR)——这就是"回归对抗动量"的特征。
 
-This is the deepest insight of the project: **a market-neutral residual-reversion
-book is implicitly short idiosyncratic momentum/drift, and that is its main risk,
-larger than transaction cost.** It motivates the mean-reversion-speed filter (only
-trade fast-reverting residuals) and a shorter horizon (less time exposed to
-drift).
+这是本项目最深的洞见:**一个市场中性的残差回归组合隐含做空特质动量/漂移,这才是它的
+主要风险,比交易成本更大。** 它指向均值回归速度过滤(只交易快速回归的残差)与更短持仓
+周期(更少时间暴露于漂移)。
 
 ---
 
-## 9. Sensitivity & capacity analysis (Task 5)
+## 9. 敏感性与容量分析(Task 5)
 
-Full grids are in `reports/sensitivity.md`. We sweep one knob at a time
-(robustness, not optimisation). Highlights:
+完整网格见 `reports/sensitivity.md`。我们一次只扫一个旋钮(稳健性,而非寻优)。要点:
 
-- **Entry threshold is the most important knob, and points to a cost hurdle.**
-  Net rises monotonically with threshold: 2.0 (the brief's start, worst) → 3.0
-  (Sharpe +0.28, net +$63k). Higher thresholds trade fewer, higher-conviction
-  signals that clear costs. This is an economically sensible direction, not a lucky
-  point.
-- **Longer signal window helps** (zscore_window 60→90 moves net toward breakeven).
-- **Factor window 60 ≫ 90 ≫ 120** (idio edge +$418k at 60) — confirms the
-  AL-standard choice.
-- **The half-life filter helps in isolation** (best ~HL 12) but its *interaction*
-  with other knobs is unstable and non-monotonic — a warning against multi-knob
-  optimisation. We therefore keep it off in the baseline.
-- **Cost sensitivity: slippage barely matters, fees matter linearly.** Doubling
-  the impact coefficient (12→24 bps) changes net <2%; the book is not impact-
-  constrained at $10M. Halving the fee (4→2 bps) recovers ~$25k.
-- **Capacity: Sharpe is flat from $10M to $200M.** Net scales ~linearly with AUM
-  because participation stays tiny against the universe's ADV. The capacity ceiling
-  for the *daily* strategy is well above $200M; the constraint is edge, not
-  liquidity. (This directly answers the brief's $10–50M scalability requirement:
-  liquidity is not the limiter.)
+- **进场阈值是最重要的旋钮,且指向一个成本门槛。** 净值随阈值单调上升:2.0(题目起点,
+  最差)→ 3.0(夏普 +0.28,净 +$63k)。更高阈值交易更少、更高置信度、能覆盖成本的信号。
+  这是有经济意义的方向,而非某个幸运点。
+- **更长信号窗口有帮助**(zscore_window 60→90 把净值推向盈亏平衡)。
+- **因子窗口 60 ≫ 90 ≫ 120**(60 时特质边际 +$418k)——印证 AL 标准选择。
+- **半衰期过滤单独看有帮助**(最优 ~HL 12),但它与其他旋钮的*交互*不稳定且非单调——
+  这是对多旋钮联合寻优的警示。因此基线里关闭。
+- **成本敏感性:滑点几乎不影响,手续费线性影响。** 冲击系数翻倍(12→24 bps)净值变化 <2%;
+  $10M 下组合不受冲击约束。手续费减半(4→2 bps)回收 ~$25k。
+- **容量:夏普在 $10M 到 $200M 之间不变。** 净值随 AUM 近乎线性,因为相对该资产池 ADV 的
+  参与率始终很小。*日频*策略的容量天花板远在 $200M 以上;约束是边际,不是流动性。(这直接
+  回答了题目 $10–50M 规模化要求:流动性不是限制因素。)
 
-**Over-fitting guardrails.** We report the brief's suggested parameters as the
-baseline, justify windows a-priori from the literature, sweep single knobs rather
-than jointly optimising, and explicitly flag the unstable multi-knob region. We do
-*not* present the cherry-picked Sharpe-0.44 combination as the result.
+**防过拟合护栏。** 我们把题目建议参数作为基线、从文献先验地论证窗口、扫单旋钮而非联合
+寻优、并明确标出不稳定的多旋钮区域。我们*不*把挑出来的夏普 0.44 组合当作结果呈现。
 
 ---
 
-## 10. The hourly track (bonus)
+## 10. 小时频赛道(加分项)
 
-Re-running at 1h (crypto-1h + Alpaca equity-1h, same pipeline, `frequency: hourly`):
+在 1h 重跑(加密 1h + Alpaca 股票 1h,同一管道,`frequency: hourly`):
 
-| | Daily | Hourly |
+| | 日频 | 小时频 |
 |---|--:|--:|
-| Gross (tradeable) | +$35k | **+$30k (positive)** |
-| Turnover (2-way/yr) | 4.8× | ~43× |
-| Net | −$83k | −$0.84M (fees-dominated) |
+| 毛利(可交易) | +$35k | **+$30k(正)** |
+| 换手(双边/年) | 4.8× | ~43× |
+| 净 | −$83k | −$0.84M(手续费主导) |
 
-(Earlier, pre-realism hourly runs on looser sizing showed a larger gross
-+$130–150k; the figures above are the final, realistically-costed, reproducible
-numbers. The sign — gross-positive — is the robust point.)
+(早先未上真实化、定仓更松的小时频跑出过更大的毛利 +$130–150k;上表是最终、按真实成本
+计、可复现的数字。"毛利为正"这个**符号**才是稳健的结论。)
 
-The intraday gross edge is clearly positive and larger — consistent with alpha
-drift being smaller over hours and microstructure reversion strongest at short
-horizons. But hourly turnover makes **fees the binding constraint**, the mirror
-image of the daily picture (where alpha-drift is the binding constraint). The
-promising direction is therefore *intraday signal + aggressive turnover control*
-(high threshold, throttled rebalancing, maker fills).
+小时频毛利边际明确为正且更大——与"alpha 漂移在小时尺度更小、微观结构回归在短周期最强"
+一致。但小时频换手使**手续费成为约束**,与日频(alpha 漂移为约束)恰好镜像。因此有前景的
+方向是*日内信号 + 激进的换手控制*(高阈值、节流再平衡、maker 成交)。
 
 ---
 
-## 11. Where is the alpha, and is it sustainable? (business insight)
+## 11. alpha 在哪、可持续吗?(业务洞察)
 
-- **Alpha source:** liquidity provision to retail over-reaction in idiosyncratic,
-  crypto-correlated equities and alts. It is real (positive gross, stationary
-  residuals) but thin and contested.
-- **Structural tailwind:** a unified cross-market venue removes the execution
-  friction (one account, one margin, 24/7 hedging) that historically made this the
-  preserve of multi-prime hedge funds — genuinely lowering the barrier.
-- **Long-run ceiling:** (i) the edge competes with the asset's idiosyncratic
-  momentum, which dominates in trending regimes; (ii) it is cost-sensitive at high
-  frequency; (iii) as more participants run it, the residual reversion compresses.
-  Capacity in *dollar* terms is high (>$200M daily, impact-light), but capacity in
-  *Sharpe* terms is the real limit and is modest.
-- **Honest verdict:** a viable *component* of a diversified market-neutral book —
-  especially intraday with tight cost control and a drift/momentum overlay — but
-  not a standalone strategy at daily frequency net of realistic costs over this
-  sample.
+- **alpha 来源:** 为特质、与加密相关的股票和山寨币中的散户过度反应提供流动性。它真实
+  (毛利为正、残差平稳)但单薄且被争夺。
+- **结构性顺风:** 统一的跨市场场所去掉了执行摩擦(一个账户、一笔保证金、24/7 对冲)——
+  历史上这让该策略只属于多 prime 对冲基金,如今真正降低了门槛。
+- **长期天花板:**(i)边际与资产的特质动量竞争,后者在趋势环境占优;(ii)高频下对成本
+  敏感;(iii)随更多参与者运行,残差回归会被压缩。**美元**容量很高(>$200M 日频、冲击轻),
+  但**夏普**容量才是真正的限制,且不高。
+- **诚实判断:** 是一个多元化市场中性组合里可用的*组件*——尤其是日内、配合严格成本控制
+  和漂移/动量叠加——但在日频、按真实成本、在本样本上不是一个独立策略。
 
 ---
 
-## 12. Limitations & honest assessment
+## 12. 局限与诚实评估
 
-- **Net-negative baseline.** With the brief's parameters the daily strategy loses
-  ~0.25%/yr after costs. We do not dress this up; the value is the diagnosis.
-- **Single regime.** 2023-2025 was a strong crypto/tech bull — the worst regime
-  for a book that is implicitly short idiosyncratic momentum. A bear/range sample
-  would likely be kinder; we cannot test it with available history.
-- **Equity data is IEX, not SIP.** Prices are representative for liquid names but
-  volumes are a subset (scaled for the capacity model); thin names (CLSK/HOOD) are
-  the least reliable.
-- **Linear, static factor sets.** Betas are OLS and factor membership is fixed;
-  no orthogonalisation of ETH against BTC (a small residual-exposure source).
-- **POL** carries a 3-day migration gap; **borrow at a flat 3%** is an assumption.
-- **Backtest, not live:** no queue position, partial fills, or borrow availability
-  modelled beyond a flat rate.
+- **基线净负。** 用题目参数,日频策略扣成本后约 −0.25%/年。我们不粉饰;价值在于诊断。
+- **单一市场环境。** 2023-2025 是强加密/科技牛市——对一个隐含做空特质动量的组合是最差的
+  环境。熊市/震荡样本大概率更友好;现有历史无法测试。
+- **股票数据是 IEX 而非 SIP。** 流动标的价格有代表性,但成交量是子集(已为容量模型放大);
+  薄标的(CLSK/HOOD)最不可靠。
+- **线性、静态因子集。** β 是 OLS、因子成员固定;未对 ETH 相对 BTC 做正交化(一个小的残差
+  暴露来源)。
+- **POL** 带 3 天迁移缺口;**借券费按固定 3%** 是假设。
+- **是回测而非实盘:** 未建模排队位置、部分成交、超出固定费率的借券可得性。
 
 ---
 
-## 13. Improvements & roadmap
+## 13. 改进方向与路线图
 
-1. **Drift/momentum overlay** (highest expected value): suppress or invert shorts
-   on names with strong idiosyncratic momentum — directly attacks the −$561k drag.
-2. **Intraday with turnover control:** the hourly gross edge is positive; pair it
-   with maker fills, a wider no-trade band, and rebalance throttling.
-3. **OU s-score with κ-filter** as the primary signal (partly built) for a cleaner,
-   self-normalising reversion measure that gates on reversion speed.
-4. **Orthogonalised / PCA factors** to remove the dual-factor (ETH/BTC) residual
-   exposure and stabilise hedges.
-5. **MATIC→POL full stitch tuning; SIP equity data; richer borrow/financing model.**
-6. **Cross-market basis module** (Binance equity-perp vs spot) as an uncorrelated
-   sleeve.
+1. **漂移/动量叠加**(预期价值最高):对有强特质动量的标的抑制或反转其空头——直接攻击
+   −$561k 的 alpha 漂移拖累。
+2. **日内 + 换手控制:** 小时频毛利边际为正;配合 maker 成交、更宽免交易带、节流再平衡。
+3. **OU s-score + κ 过滤**作为主信号(已部分实现),给出更干净、自归一化、按回归速度门控的
+   回归度量。
+4. **正交化 / PCA 因子**去掉双因子(ETH/BTC)残差暴露、稳定对冲。
+5. **MATIC→POL 拼接细化;SIP 股票数据;更丰富的借券/融资模型。**
+6. **跨市场基差模块**(Binance 股票永续 vs 现货)作为一个不相关的 sleeve。
 
 ---
 
-## 14. Reproducibility
+## 14. 可复现性
 
-Pinned dependencies (`pyproject.toml`); single global seed; idempotent, cached
-downloads; one config file drives every run. `python scripts/download_data.py`
-then `python scripts/run_backtest.py` reproduce the headline numbers exactly;
-`python scripts/sensitivity.py` regenerates the grids; `pytest` (12 tests) covers
-no-lookahead, risk constraints, costs, execution band, and the half-life filter.
-Charts are in `reports/` (equity/drawdown, PnL attribution, factor exposure).
+锁版本依赖(`pyproject.toml`);单一全局种子;幂等、带缓存的下载;一个配置文件驱动所有
+运行。`python scripts/download_data.py` 然后 `python scripts/run_backtest.py` 精确复现核心
+数字;`python scripts/sensitivity.py` 重新生成网格;`pytest`(12 个测试)覆盖无前视、风控
+约束、成本、执行带与半衰期过滤。图表在 `reports/`(净值/回撤、PnL 归因、因子暴露)。
