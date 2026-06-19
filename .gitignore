@@ -1,0 +1,20 @@
+# data caches (regenerate via scripts/download_data.py)
+data/raw/
+data/processed/
+
+# secrets (API keys) — never commit
+config/secrets.yaml
+.env
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# report charts (reports/*.png) ARE committed as deliverables
+
+# local Claude Code settings
+.claude/

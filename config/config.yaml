@@ -1,0 +1,139 @@
+# =============================================================================
+# Cross-Market Idiosyncratic Mean-Reversion Strategy — configuration
+# All tunable knobs live here so the pipeline runs config-only (no code edits)
+# for sensitivity / cost / capacity analysis.
+# =============================================================================
+
+run:
+  seed: 42
+  frequency: daily          # daily (mandatory deliverable) | hourly (bonus)
+  start: "2023-01-01"
+  end: null                 # null => last complete month (resolved at runtime)
+  data_dir: "data"
+
+# -----------------------------------------------------------------------------
+# Sampling / calendar alignment
+#   Daily bars are sampled at one fixed UTC instant ~ US market close.
+#   16:00 America/New_York = 21:00 UTC (EST) / 20:00 UTC (EDT).
+#   We standardise on 21:00 UTC and document the DST caveat in the README.
+# -----------------------------------------------------------------------------
+sampling:
+  daily_snapshot_utc: "21:00"
+  equity_rth_utc: ["13:30", "20:00"]   # 09:30-16:00 ET, used for hourly join
+
+# -----------------------------------------------------------------------------
+# Data sources.  Default = free path (no API key, geo-block-safe).
+#   crypto -> data.binance.vision bulk archive (spot klines + um funding)
+#   equity -> Yahoo chart API via requests + User-Agent
+# Keyed sources are pluggable; set equity_source: polygon|alphavantage + api_key
+# to pull full-2023 hourly equity later without touching downstream code.
+# -----------------------------------------------------------------------------
+sources:
+  crypto_source: crypto_archive
+  equity_source: alpaca           # yahoo | alpaca (keys in config/secrets.yaml)
+  feed: iex                       # alpaca feed: iex (free) | sip (paid)
+  api_key: null
+  request_timeout: 20
+  max_retries: 4
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
+
+# -----------------------------------------------------------------------------
+# Universe.  `active_universe` selects which named set to run.
+#   minimal_core -> fast iteration; full -> the complete assignment universe.
+# Each ticker maps to a category; categories map to factor sets below.
+# -----------------------------------------------------------------------------
+active_universe: full
+
+universes:
+  minimal_core:
+    crypto_equities: [MSTR, COIN, MARA]
+    altcoins:        [ETH, SOL, BNB, ARB, UNI, AAVE]
+    tech_perp:       [NVDA, TSLA, AMD]
+  full:
+    crypto_equities: [MSTR, COIN, MARA, RIOT, CLSK, HOOD]
+    altcoins:        [ETH, SOL, BNB, ARB, OP, UNI, AAVE, LINK, AVAX, DOT, LTC, POL]
+    tech_perp:       [NVDA, TSLA, AMD, META, AAPL, MSFT, AMZN]
+
+# Factor assets (downloaded like any other series, flagged is_factor).
+factors: [BTC, ETH, SPY, QQQ, SMH]
+
+# Per-category factor map (Task 2 recommendation; editable for sensitivity).
+factor_map:
+  crypto_equities: [BTC, QQQ]      # 币股 ~ BTC + equity beta
+  altcoins:        [ETH, BTC]      # L2/DeFi style; ETH-as-asset overrides to BTC only
+  tech_perp:       [QQQ, SMH]      # US tech
+# Asset-level overrides (e.g. ETH is an L1 -> BTC only; miners -> BTC+SMH).
+factor_overrides:
+  ETH:  [BTC]
+  MARA: [BTC, SMH]
+  RIOT: [BTC, SMH]
+  CLSK: [BTC, SMH]
+
+# Source-symbol resolution.
+#   crypto tickers -> "<TICKER>USDT" spot klines on the archive.
+#   equity tickers -> used as-is on Yahoo.
+# Ticker-change / survivorship notes (applied in align.py).
+symbol_overrides: {}        # e.g. {SQ: XYZ, MATIC: POL}
+# Ticker renames stitched into one continuous series (chronological order).
+# Binance renamed MATIC->POL in Sep-2024; MATICUSDT holds the pre-rename history.
+symbol_stitch:
+  POL: [MATICUSDT, POLUSDT]
+delistings: {}              # e.g. {FOO: "2024-03-01"}  (excluded after date)
+
+# -----------------------------------------------------------------------------
+# Factor model (Task 2)
+# -----------------------------------------------------------------------------
+factor_model:
+  rolling_window: 60        # Avellaneda-Lee standard; sensitivity reported (60>90>120)
+  min_obs: 40               # minimum obs before a β is emitted
+  adf_pvalue_max: 0.10      # residuals above this are flagged non-stationary
+
+# -----------------------------------------------------------------------------
+# Signals (Task 3)
+# -----------------------------------------------------------------------------
+signals:
+  # resid_spread = z-score of the CUMULATIVE residual (price rich/cheap vs factors;
+  #                classic Avellaneda-Lee intent) [default]
+  # resid_return = z-score of the daily residual return (literal task formula;
+  #                short-term reversal)
+  mode: resid_spread
+  zscore_window: 60         # trailing window for residual mean/std
+  entry_threshold: 2.0
+  exit_threshold: 0.5
+  max_holding_bars: 20      # forced exit (stale signal guard)
+  # Mean-reversion-speed gate (Avellaneda-Lee): only open positions whose residual
+  # AR(1) half-life is <= this many bars. null = off. Screens out slow/drifting
+  # names where idiosyncratic drift dominates over reversion.
+  max_half_life_bars: null  # baseline off; analysed as an enhancement in the report
+
+# -----------------------------------------------------------------------------
+# Portfolio construction + risk (Task 3)
+# -----------------------------------------------------------------------------
+portfolio:
+  aum: 10_000_000
+  max_concurrent_signals: 40
+  target_pair_vol: 0.15     # annualized vol budget per pair (equal-vol sizing)
+  no_trade_band: 0.0015     # rebalance an instrument only when target drifts > 0.15% AUM
+  risk:
+    max_asset_weight: 0.03        # |position| <= 3% AUM
+    max_sector_weight: 0.15       # gross sector exposure <= 15% AUM
+    max_gross_leverage: 3.0       # sum|positions| <= 3x AUM
+    max_net_factor_exposure: 0.05 # net beta-$ to any factor <= 5% AUM
+
+# -----------------------------------------------------------------------------
+# Costs (Task 4)
+# -----------------------------------------------------------------------------
+costs:
+  spot_fee_bps: 10.0        # Binance spot taker 0.10%
+  perp_fee_bps: 4.0         # Binance perp taker 0.04%
+  # Slippage: 'liquidity' = half-spread + square-root market impact scaled by the
+  # trade's participation in rolling ADV; 'flat' = constant slippage_bps.
+  slippage_model: liquidity
+  slippage_bps: 5.0         # used when slippage_model == flat
+  slippage_base_bps: 1.0    # half-spread floor (liquidity model)
+  slippage_impact_bps: 12.0 # sqrt-impact coef: bps at 100% of one bar's ADV
+  iex_volume_scale: 25.0    # scale Alpaca IEX equity volume -> consolidated ADV proxy
+  borrow_annual_pct: 3.0    # short-equity borrow, mid of assumed 1-5% range
+  funding_8h_fallback_bps: 1.0  # used only when a perp funding series is missing
+  apply_funding: true
+  apply_borrow: true
