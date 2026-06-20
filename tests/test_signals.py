@@ -73,3 +73,21 @@ def test_half_life_filter_reduces_or_equals_trades():
     cfg.raw["signals"]["max_half_life_bars"] = 10
     filt = generate_signals(cfg, fm.residuals).target_sign.abs().sum().sum()
     assert filt <= base                  # a gate can only remove entries
+
+
+def test_drift_gate_blocks_shorts_only():
+    cfg = _cfg()
+    returns, fr = _synth()
+    fm = fit_rolling_factor_model(cfg, returns, fr)
+    base = generate_signals(cfg, fm.residuals)
+    # default (gate disabled) is identical whether or not returns are passed.
+    pd.testing.assert_frame_equal(
+        base.target_sign, generate_signals(cfg, fm.residuals, returns).target_sign)
+    # a maximally strict gate blocks every short; longs are untouched.
+    cfg.raw["signals"]["drift_gate"] = {"enabled": True, "window": 60,
+                                        "max_short_mom_t": -1e9}
+    gated = generate_signals(cfg, fm.residuals, returns)
+    ts_b, ts_g = base.target_sign["MSTR"], gated.target_sign["MSTR"]
+    assert (ts_b < 0).sum() > 0          # baseline had shorts
+    assert (ts_g < 0).sum() == 0         # gate blocked every short
+    assert (ts_g > 0).sum() > 0          # longs still taken

@@ -53,7 +53,7 @@ def main() -> None:
     print(diagnostics_table(cfg, fm).to_string())
 
     print("\nGenerating signals + sizing ...")
-    sig = generate_signals(cfg, fm.residuals)
+    sig = generate_signals(cfg, fm.residuals, panel.returns)
     asset_notional = size_positions(cfg, sig, fm)
     port = apply_risk_constraints(cfg, asset_notional, fm)
     # Realistic execution: throttle churn with a no-trade band -> actually-held book.

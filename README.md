@@ -22,7 +22,9 @@ pip install -e .                 # pinned deps from pyproject.toml
 python scripts/download_data.py  # fetch + cache raw data, build aligned panel
 python scripts/run_backtest.py   # factor model -> signals -> portfolio -> metrics
 python scripts/sensitivity.py    # parameter / cost / capacity grids -> reports/
-pytest -q                        # 16 tests: lookahead, risk, costs+fees, funding, execution, signals
+pip install -e ".[ml]"           # optional: torch, for the ML bonus (see report §16)
+python scripts/run_ml.py         # CNN size overlay + drift gate vs baseline (§16)
+pytest -q                        # 16 tests (+3 ML with torch): lookahead, risk, costs, funding, ...
 ```
 
 Everything is driven by [`config/config.yaml`](config/config.yaml) — universe,
@@ -144,7 +146,10 @@ Binance spot taker 0.10%, crypto legs at perp taker 0.04%.
 
 ## Roadmap (next steps)
 
-* **Drift/momentum overlay** (highest value): attack the −$547k alpha-drift drag.
+* **Drift/momentum overlay** (implemented, see report §16.6): a signal-layer gate
+  that blocks shorting strongly up-trending names cuts the alpha-drift −$547k→−$329k
+  and flips the book net-positive (Sharpe −0.44→+0.37) — but the gain is partly a
+  2023-25 bull-market mirror effect (off by default; needs out-of-regime validation).
 * **Turnover control + profit tuning** (deliberately not applied here): higher
   thresholds, wider no-trade band, maker fills, the net-positive 280-bar window.
 * OU s-score with κ-filter as primary signal; orthogonalised/PCA factors.

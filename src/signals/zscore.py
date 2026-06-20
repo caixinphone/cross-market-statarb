@@ -74,13 +74,15 @@ def half_life_bars(cfg: Config, residuals: pd.DataFrame) -> pd.DataFrame:
 
 
 def _state_machine(z: np.ndarray, entry: float, exit_: float, max_hold: int,
-                   can_enter: np.ndarray | None = None) -> np.ndarray:
+                   can_enter: np.ndarray | None = None,
+                   can_short: np.ndarray | None = None) -> np.ndarray:
     """Per-asset hysteresis state machine → target sign in {-1,0,+1}.
 
-    Enter (fade) when flat and |z|>entry (and ``can_enter`` if given). Exit to
-    flat when |z|<exit, the sign flips, or holding exceeds max_hold. Exits always
-    use the real z, so the entry gate (e.g. a half-life filter) never traps an
-    open position.
+    Enter (fade) when flat and |z|>entry (and ``can_enter`` if given). A SHORT
+    entry additionally requires ``can_short`` (the drift gate: don't short a name
+    in a strong uptrend). Exit to flat when |z|<exit, the sign flips, or holding
+    exceeds max_hold. Exits always use the real z, so a gate never traps an open
+    position.
     """
     n = len(z)
     sign = np.zeros(n)
@@ -92,9 +94,10 @@ def _state_machine(z: np.ndarray, entry: float, exit_: float, max_hold: int,
             sign[t] = state  # carry; gaps handled by engine via prices
             continue
         gate = True if can_enter is None else bool(can_enter[t])
+        short_ok = True if can_short is None else bool(can_short[t])
         if state == 0:
-            if gate and zt > entry:
-                state, held = -1, 0          # rich -> short
+            if gate and zt > entry and short_ok:
+                state, held = -1, 0          # rich -> short (only if not a bull name)
             elif gate and zt < -entry:
                 state, held = +1, 0          # cheap -> long
         else:
@@ -104,13 +107,29 @@ def _state_machine(z: np.ndarray, entry: float, exit_: float, max_hold: int,
             if reverted or held >= max_hold:
                 state = 0
             elif flipped:
-                state = -state if gate else 0   # re-enter opposite only if allowed
-                held = 0
+                new = -state
+                ok = gate and (short_ok if new == -1 else True)
+                state, held = (new, 0) if ok else (0, held)  # re-enter opposite if allowed
         sign[t] = state
     return sign
 
 
-def generate_signals(cfg: Config, residuals: pd.DataFrame) -> SignalResult:
+def _short_gate(cfg: Config, returns: pd.DataFrame) -> pd.DataFrame:
+    """Per-bar mask, True where a SHORT is allowed (name not strongly trending up).
+
+    Uses a t-stat of the trailing return: t = Σret / (σ_ret·√W). Shorting a name
+    with a large positive t (a ripping uptrend) is exactly the −$547k bleed.
+    """
+    W = int(cfg.get("signals", "drift_gate", "window", default=120))
+    kmax = float(cfg.get("signals", "drift_gate", "max_short_mom_t", default=1.0))
+    mom = returns.rolling(W).sum()
+    se = (returns.rolling(W).std() * np.sqrt(W)).replace(0.0, np.nan)
+    tstat = mom / se
+    return tstat <= kmax                     # NaN (warmup) -> False -> short blocked
+
+
+def generate_signals(cfg: Config, residuals: pd.DataFrame,
+                     returns: pd.DataFrame | None = None) -> SignalResult:
     entry = float(cfg.get("signals", "entry_threshold", default=2.0))
     exit_ = float(cfg.get("signals", "exit_threshold", default=0.5))
     max_hold = int(cfg.get("signals", "max_holding_bars", default=20))
@@ -122,9 +141,16 @@ def generate_signals(cfg: Config, residuals: pd.DataFrame) -> SignalResult:
         # Mean-reversion-speed filter: only OPEN positions on fast-reverting names.
         gate = (half_life_bars(cfg, residuals) <= float(max_hl)).fillna(False)
 
+    # Drift gate: block shorts on strongly up-trending names (off by default).
+    can_short = None
+    if cfg.get("signals", "drift_gate", "enabled", default=False) and returns is not None:
+        can_short = _short_gate(cfg, returns).reindex(
+            index=z.index, columns=z.columns).fillna(False)
+
     target = pd.DataFrame(
         {c: _state_machine(z[c].to_numpy(), entry, exit_, max_hold,
-                           None if gate is None else gate[c].to_numpy())
+                           None if gate is None else gate[c].to_numpy(),
+                           None if can_short is None else can_short[c].to_numpy())
          for c in z.columns},
         index=z.index,
     )

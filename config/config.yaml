@@ -109,6 +109,15 @@ signals:
   # names where idiosyncratic drift dominates over reversion. (If enabled on the
   # hourly track, scale ×7 vs the daily convention, e.g. HL 12 days -> ~84 bars.)
   max_half_life_bars: null  # baseline off; analysed as an enhancement in the report
+  # Drift / momentum gate (the real "avoid shorting a bull market" lever, §16.6):
+  # block a SHORT entry when the name's own trailing momentum is a strong uptrend
+  # (you'd be shorting a ripping name -> the −$547k idiosyncratic-drift bleed).
+  # Measured as a t-stat of the trailing return; longs are never blocked. OFF by
+  # default so the baseline is byte-identical.
+  drift_gate:
+    enabled: false
+    window: 120             # trailing bars for the momentum t-stat
+    max_short_mom_t: 1.0    # block short if trailing-return t-stat > this
 
 # -----------------------------------------------------------------------------
 # Portfolio construction + risk (Task 3)
@@ -143,3 +152,48 @@ costs:
   funding_8h_fallback_bps: 1.0  # used only when a perp funding series is missing
   apply_funding: true
   apply_borrow: true
+
+# -----------------------------------------------------------------------------
+# Machine-learning enhancement (bonus / Task 6) — OFF by default so the baseline
+# backtest is byte-identical. Meta-learning stack: the mean-reversion z-score
+# signal picks timing (layer 1), a 1D CNN picks trade SIZE (layer 2), trained on
+# a net-of-cost margin label via walk-forward. See scripts/run_ml.py and §16.
+# Requires the optional `ml` extra (torch): pip install -e ".[ml]"
+#
+# DEFAULT = the plain sizer (6 mean-reversion-state channels, gentle symmetric
+# tilt, no veto) — the version that actually helps (§16). The trend/direction
+# channels and short-veto knobs below are kept available but OFF by default
+# because, measured walk-forward, they *hurt* (§16.5): the per-trade margin signal
+# is too weak to identify bleeding shorts. Avoiding bull-market shorts is done at
+# the SIGNAL layer instead (see signals.drift_gate).
+# -----------------------------------------------------------------------------
+ml:
+  enabled: false            # OFF -> default pipeline unchanged
+  window: 64                # 1D feature-window length L (bars, ends at entry bar)
+  # Default = mean-reversion-state channels only (best, §16). Optional trend/
+  # direction channels (hurt OOS): mom, factor_mom, resid_drift, sign.
+  channels: [resid, zscore, spread, resid_vol, ret, factor_ret]
+  mom_window: 120           # trailing window for optional momentum/drift channels
+  hidden: 16                # CNN channel width
+  dropout: 0.05             # light regularisation
+  weight_decay: 0.00001     # Adam L2 (light)
+  val_frac: 0.0             # 0 = train full epochs; >0 enables early stopping
+  patience: 5               # early-stopping patience (epochs, when val_frac>0)
+  n_folds: 5                # walk-forward folds
+  epochs: 40
+  lr: 0.001
+  batch_size: 64
+  # Sizing map for the CNN prediction (predicted NET reversion margin):
+  #   conviction (default) = capital ∝ predicted reversion conviction (relative):
+  #       w = clip(1 + gain·(pred−μ)/σ, w_min, w_max); above-average predicted
+  #       reversion -> more capital. "the more confident the reversion, the more capital."
+  #   tilt = legacy gentle tilt centred on 1.0 (+ optional short veto), for comparison.
+  sizing: conviction
+  conviction_gain: 1.0      # conviction: multiplier slope per σ of predicted reversion
+  w_min: 0.0                # conviction: lowest size for low-conviction trades
+  w_max: 3.0                # max per-trade size multiplier
+  tilt: 0.5                 # (tilt mode) multiplier slope per train-σ of predicted margin
+  floor_long: 0.25          # (tilt mode) symmetric gentle floor
+  floor_short: 0.25         # (tilt mode) set <floor_long + short_veto_pct>0 for the veto experiment
+  short_veto_pct: 0.0       # (tilt mode) 0 = off. >0 vetoes the worst-predicted shorts.
+  seed: 42

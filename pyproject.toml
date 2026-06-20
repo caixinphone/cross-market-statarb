@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+ml = ["torch>=2,<3"]        # bonus: 1D-CNN meta-sizing (scripts/run_ml.py)
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

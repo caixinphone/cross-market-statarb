@@ -32,7 +32,7 @@ from src.signals.zscore import generate_signals
 
 
 def evaluate(cfg, panel, funding, fm):
-    sig = generate_signals(cfg, fm.residuals)
+    sig = generate_signals(cfg, fm.residuals, panel.returns)
     an = size_positions(cfg, sig, fm)
     port = apply_risk_constraints(cfg, an, fm)
     actual = apply_no_trade_band(cfg, port.positions)
