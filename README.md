@@ -1,156 +1,124 @@
-# Cross-Market Idiosyncratic Mean-Reversion (Statistical Arbitrage)
+# 跨市场特质均值回归(统计套利)
 
-A market-neutral statistical-arbitrage backtest across crypto and US-equity
-proxies, in the spirit of a Binance unified cross-market account. Each asset is
-modelled as a rolling multi-factor regression on systematic factors (BTC, ETH,
-SPY, QQQ, SMH); the **idiosyncratic residual** is traded back to its mean while
-factor exposure is hedged out, so the book earns only the correction of
-short-term mispricing.
+一个横跨加密与美股代理资产的**市场中性统计套利**回测,以 Binance 统一跨市场账户为执行背景。
+每个资产用滚动多因子回归对系统性因子(BTC、ETH、SPY、QQQ、SMH)建模;交易其**特质残差**回归
+均值,同时对冲掉因子暴露,使组合只赚"短期定价错误被修正"的钱。
 
 ```
-r_i,t = α_i + Σ_f β_{i,f}·r_f,t + ε_i,t      # rolling factor model
-signal = z-score of the residual spread      # rich/cheap vs factors
-trade  = fade the deviation, β-hedge factors  # market-neutral pair
+r_i,t = α_i + Σ_f β_{i,f}·r_f,t + ε_i,t      # 滚动因子模型
+signal = 残差价差的 z-score                  # 相对因子有多贵/多便宜
+trade  = 反向交易偏离 + 按 β 对冲因子          # 市场中性配对
 ```
 
-## Quickstart
+## 快速开始
 
 ```bash
-pip install -e .                 # pinned deps from pyproject.toml
-# equity data uses Alpaca: put keys in config/secrets.yaml (gitignored) or
-# ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY env vars
-python scripts/download_data.py  # fetch + cache raw data, build aligned panel
-python scripts/run_backtest.py   # factor model -> signals -> portfolio -> metrics
-python scripts/sensitivity.py    # parameter / cost / capacity grids -> reports/
-pip install -e ".[ml]"           # optional: torch, for the ML bonus (see report §16)
-python scripts/run_ml.py         # CNN size overlay + drift gate vs baseline (§16)
-pytest -q                        # 16 tests (+3 ML with torch): lookahead, risk, costs, funding, ...
+pip install -e .                 # 按 pyproject.toml 锁版本装依赖
+# 美股数据用 Alpaca:把密钥放到 config/secrets.yaml(已 gitignore)
+# 或设环境变量 ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY
+python scripts/download_data.py  # 拉取+缓存原始数据,构建对齐面板
+python scripts/run_backtest.py   # 因子模型 -> 信号 -> 组合 -> 指标
+python scripts/sensitivity.py    # 参数/成本/容量网格 -> reports/
+pip install -e ".[ml]"           # 可选:torch,用于 ML 加分项(见报告 §16)
+python scripts/run_ml.py         # CNN 定仓 + 漂移门控 vs 基线(§16)
+pytest -q                        # 20 个测试:无前视、风控、成本、资金费、门控、ML……
 ```
 
-Everything is driven by [`config/config.yaml`](config/config.yaml) — universe,
-factor map, signal thresholds, risk caps, and costs — so sensitivity/cost/
-capacity analyses are config-only, no code edits. The **primary track is hourly**
-(`frequency: hourly`, the default); switch `frequency: daily` to reproduce the
-daily comparison (both run off the same 1h cache). Bar-count windows are set in the
-hourly track's units (the daily calendar convention × 7 RTH bars/day). See
-**[reports/strategy_report.md](reports/strategy_report.md)** for the full write-up.
+一切由 [`config/config.yaml`](config/config.yaml) 驱动——资产池、因子映射、信号阈值、风控上限、
+成本——所以敏感性/成本/容量分析都是**改配置即可、无需改代码**。**主轨道为小时频**
+(`frequency: hourly`,默认);切到 `frequency: daily` 可复现日频对比(两者跑在同一份 1h 缓存上)。
+按 bar 计数的窗口用小时频量纲(日频日历惯例 × 7 根 RTH bar/日)。完整写作见
+**[reports/strategy_report.md](reports/strategy_report.md)**。
 
-## Architecture
+## 架构
 
-| Module | Responsibility |
+| 模块 | 职责 |
 |---|---|
-| `src/data/sources.py` | Fetchers: Binance bulk archive (crypto klines + funding), Alpaca (equities), Yahoo (fallback) |
-| `src/data/fetch.py` | Orchestration + idempotent parquet cache + ticker-rename stitch |
-| `src/data/align.py` | Cross-market UTC alignment → returns + dollar-volume panel |
-| `src/factors/factor_model.py` | Point-in-time rolling OLS → β, residuals |
-| `src/factors/diagnostics.py` | R² + ADF residual-stationarity table |
-| `src/signals/zscore.py` | Residual z-score, half-life filter, entry/exit state machine |
-| `src/portfolio/construct.py` | Equal-volatility sizing, fixed at entry |
-| `src/portfolio/risk.py` | Factor hedging + asset/sector/leverage/factor caps |
-| `src/portfolio/execution.py` | No-trade band → actually-held book |
-| `src/backtest/{engine,costs}.py` | PIT backtest + fees/liquidity-slippage/funding/borrow |
-| `src/analysis/{metrics,attribution,plots}.py` | Metrics, PnL decomposition, charts |
-| `scripts/sensitivity.py` | Parameter / cost / capacity grids |
+| `src/data/sources.py` | 取数:Binance 批量归档(加密 K 线+资金费)、Alpaca(美股)、Yahoo(兜底) |
+| `src/data/fetch.py` | 编排 + 幂等 parquet 缓存 + 改名拼接 |
+| `src/data/align.py` | 跨市场 UTC 对齐 → 收益 + 成交额面板 |
+| `src/factors/factor_model.py` | 时点安全的滚动 OLS → β、残差 |
+| `src/factors/diagnostics.py` | R² + 残差平稳性(ADF)表 |
+| `src/signals/zscore.py` | 残差 z-score、半衰期过滤、进出场状态机、漂移门控 |
+| `src/portfolio/construct.py` | 等波动率定仓,开仓即冻结 |
+| `src/portfolio/risk.py` | 因子对冲 + 资产/板块/杠杆/因子上限 |
+| `src/portfolio/execution.py` | 免交易带 → 实际持仓账本 |
+| `src/backtest/{engine,costs}.py` | 时点安全回测 + 手续费/流动性滑点/资金费/借券 |
+| `src/analysis/{metrics,attribution,plots}.py` | 指标、PnL 分解、图表 |
+| `src/ml/{dataset,cnn,meta_sizing}.py` | ML 加分项:1D CNN 把握分配定仓(§16,可选) |
+| `scripts/sensitivity.py` | 参数/成本/容量网格 |
 
-## Data sources & caveats (important)
+## 数据来源与说明(重要)
 
-* **Binance live API is geo-blocked (HTTP 451)** from the build location. Crypto
-  data therefore comes from the **official public archive `data.binance.vision`**
-  (spot 1h klines + USDⓈ-M funding) — full history to 2023, no key, and the
-  better source for backtesting anyway. The archive switched its timestamp unit
-  from ms to µs in 2025; `sources.py` normalises per-element.
-* **Equities** come from the **Alpaca market-data API** (full 2023→now hourly,
-  IEX feed on the free tier; SIP needs a paid plan). Keys live in a gitignored
-  `config/secrets.yaml` or env vars. Yahoo remains a daily fallback (`yfinance`
-  not required); Yahoo's hourly history is capped at ~730 days, which is why
-  Alpaca is used for the full-2023 hourly series.
-* **Backtest framing.** Binance's TradFi perps did not exist back to 2023, so the
-  equity legs use real US-equity prices and the crypto legs use Binance;
-  "Binance cross-market" is the execution thesis, not the historical data source.
-* **Alignment.** The hourly (primary) and daily (comparison) panels derive from
-  the **same 1h cache**. Hourly joins on the equity RTH core (14:00–20:00 UTC, 7
-  bars/day) with crypto reindexed onto those stamps; daily price = the last 1h bar
-  at/before the US-close snapshot (21:00 UTC) on the equity trading calendar. A ≤1h
-  DST offset is immaterial.
-* **Survivorship / ticker changes** handled via config (`delistings`,
-  `symbol_overrides`); a pre-listing gap is absent, not back-filled (e.g. ARB/OP
-  before their 2023 launch). **POL** is the MATIC→POL rebrand: Binance's
-  `POLUSDT` only starts at the ~Sep-2024 rename, so POL carries ~50% history
-  until a MATIC→POL stitch is added.
-* **Equity feed.** Alpaca free tier = IEX feed (a volume subset); OHLC for liquid
-  names is representative, volumes are IEX-only. SIP (full tape) needs a paid plan
-  (`sources.feed: sip`).
+* **Binance 实时 API 被地域封锁(HTTP 451)**。加密数据改用**官方公开归档
+  `data.binance.vision`**(现货 1h K 线 + USDⓈ-M 资金费)——完整到 2023、无需密钥,本就是更适合
+  回测的数据源。归档在 2025 年把时间戳单位从 ms 改成 µs;`sources.py` 逐元素归一化。
+* **美股**来自 **Alpaca 行情 API**(完整 2023→至今小时级,免费层 IEX feed;SIP 需付费)。密钥放在
+  已 gitignore 的 `config/secrets.yaml` 或环境变量里。Yahoo 作为日频兜底(不强依赖 `yfinance`);
+  Yahoo 小时历史只有 ~730 天,所以全 2023 小时序列用 Alpaca。
+* **回测设定。** Binance 的 TradFi 永续在 2023 年并不存在,所以股票腿用真实美股价格、加密腿用
+  Binance;"Binance 跨市场"是执行论点,而非历史数据来源。
+* **对齐。** 小时频(主)与日频(对比)面板都派生自**同一份 1h 缓存**。小时频对齐到美股 RTH 核心
+  (14:00–20:00 UTC,7 根/日),加密 reindex 到这些整点;日频价 = 美股交易日历上 ≤21:00 UTC 收盘
+  快照的最后一根 1h bar。≤1h 的夏令时偏移可忽略。
+* **生存偏差 / 改名**由配置处理(`delistings`、`symbol_overrides`);上市前缺口是真实缺失而非回填
+  (如 ARB/OP 在 2023 上线前)。**POL** 是 MATIC→POL 改名:Binance 的 `POLUSDT` 只从 ~2024-09 改名
+  起才有,所以在加上 MATIC→POL 拼接前 POL 只带约 50% 历史。
+* **股票 feed。** Alpaca 免费层 = IEX feed(成交量子集);流动标的的 OHLC 有代表性,成交量只是
+  IEX 口径。SIP(全盘)需付费(`sources.feed: sip`)。
 
-## Methodology highlights
+## 方法学要点
 
-* **Calendar-equivalent windows (hourly track).** Bar-count windows use the daily
-  Avellaneda-Lee convention × 7 RTH bars/day: factor/z-score window 420 (≈60
-  trading days), max-hold 140 (≈20 days). Using raw 60 hourly bars (≈8.5 days)
-  would be far too short and fabricate turnover — the central methodological point.
-* **No lookahead.** Betas/residuals at `t` use a trailing window ending at `t`;
-  the engine executes signals on `t+1` (`positions.shift(1)`). Enforced by
-  `tests/test_no_lookahead.py` (perturbing future bars cannot change past
-  signals).
-* **Stationarity gate.** Every residual is ADF-tested; the strategy only has an
-  edge where the residual mean-reverts (all 25 stationary, ADF p≈0).
-* **Equal-vol sizing.** `N_i = (target_vol / σ_resid_i) · AUM/n_signals`.
-* **Risk caps** (all verified to bind/hold): per-asset ≤3%, sector ≤15%, gross
-  leverage ≤3×, net factor exposure ≤5% of AUM.
-* **Costs.** Per-leg taker fee (equity = spot 0.10%, crypto = perp 0.04%) +
-  liquidity slippage on traded notional, USDⓈ-M funding (real 8h series, accrued
-  per-bar with overnight settlements rolled onto the next session's first RTH bar),
-  and short-equity borrow — each leg's fee, funding/borrow kept self-consistent.
+* **日历等价窗口(小时频轨道)。** 按 bar 计数的窗口用日频 Avellaneda-Lee 惯例 × 7 根 RTH bar/日:
+  因子/z-score 窗口 420(≈60 交易日),最大持仓 140(≈20 天)。直接用 60 根小时 bar(≈8.5 天)会
+  过短并制造虚假换手——这是核心方法学点。
+* **无前视。** 第 `t` 根的 β/残差只用结束于 `t` 的窗口;引擎在 `t+1` 执行(`positions.shift(1)`)。
+  由 `tests/test_no_lookahead.py` 强制(扰动未来 bar 不能改变过去信号)。
+* **平稳性门槛。** 每条残差都做 ADF 检验;只在残差均值回归处才有边际(25 条全平稳,ADF p≈0)。
+* **等波动率定仓。** `N_i = (目标波动 / σ_resid_i) · AUM/信号数`。
+* **风控上限**(全部验证成立):单资产 ≤3%、板块 ≤15%、总杠杆 ≤3×、净因子暴露 ≤5% AUM。
+* **成本。** 按腿分档 taker 费(股票=现货 0.10%、加密=永续 0.04%)+ 成交名义额上的流动性滑点、
+  USDⓈ-M 资金费(真实 8h 序列,逐 bar 计提、隔夜结算累计到次日首根 RTH bar)、做空美股借券——
+  每条腿的费用与资金费/借券口径自洽。
 
-## Reproducibility
+## 可复现性
 
-Pinned deps in `pyproject.toml`; global seed in config; downloads cached and
-idempotent (delete `data/raw` / `data/processed` to force a clean rebuild). The
-pipeline is deterministic — re-running yields identical results.
+`pyproject.toml` 锁版本依赖;配置里单一全局种子;下载带缓存且幂等(删 `data/raw` / `data/processed`
+即可强制干净重建)。管道是确定性的——重跑得到完全一致的结果。
 
-## Key findings (hourly, full 25-asset universe, 2023→2026)
+## 核心结果(小时频,全 25 标的资产池,2023→2026)
 
-Full write-up: **[reports/strategy_report.md](reports/strategy_report.md)**.
-`run_backtest.py` prints a PnL decomposition that separates *where the edge is*
-from *what eats it*. All risk caps hold (gross 0.27×, asset 3.0%, net-factor 4.8%);
-net beta to every factor ≈ 0. Panel: 5944 hourly bars × 29 columns.
+完整写作见 **[reports/strategy_report.md](reports/strategy_report.md)**。`run_backtest.py` 打印一份
+PnL 分解,把*边际在哪*与*被什么吃掉*分开。所有风控上限成立(杠杆 0.27×、单资产 3.0%、净因子
+4.8%);对每个因子的净 β ≈ 0。面板:5944 根小时 bar × 29 列。
 
-| Component | PnL ($) |
+| 组成 | PnL ($) |
 |---|--:|
-| Idiosyncratic edge `Σ held·ε` | **+599,187** |
-| Alpha-drift + hedge-error | **−547,306** |
-| Gross (tradeable) | +51,881 |
-| Fees+slippage / funding / borrow | −234,654 |
-| **Net** | **−182,772** |
+| 特质边际 `Σ held·ε` | **+599,187** |
+| alpha 漂移 + 对冲误差 | **−547,306** |
+| 毛利(可交易) | +51,881 |
+| 手续费+滑点 / 资金费 / 借券 | −234,654 |
+| **净** | **−182,772** |
 
-Headline: Sharpe −0.44, CAGR −0.55%, vol 1.24%, max DD −3.10%, turnover 6.2×/yr,
-avg hold ≈109 bars (~15.6 trading days). Fees split by venue: equity legs at
-Binance spot taker 0.10%, crypto legs at perp taker 0.04%.
+头条:夏普 −0.44,CAGR −0.55%,波动 1.24%,最大回撤 −3.10%,换手 6.2×/年,平均持仓 ≈109 根 bar
+(~15.6 交易日)。手续费按场所分档:股票腿 Binance 现货 taker 0.10%、加密腿永续 taker 0.04%。
 
-* The **idiosyncratic reversion edge is real and large** (+$599k gross), but a
-  **market-neutral residual-reversion book is implicitly short idiosyncratic
-  momentum** — shorting high-drift names in a 2023-25 bull market bleeds the drift
-  the in-sample residual removes but a real β-hedge cannot (−$547k). This drag,
-  larger than costs, is the central finding.
-* **Methodologically-correct hourly ≈ daily.** With calendar-equivalent 420-bar
-  windows the holding period is ~15 days and turnover is only 6.2×/yr — *not* the
-  43× of a naive 60-hourly-bar run. The edge/drift/net structure matches the daily
-  track (+$596k / −$561k / −$147k). More bars give steadier statistics, **not a
-  different strategy.**
-* **Capacity is not the limit:** Sharpe is flat from $10M→$200M (huge ADVs;
-  impact-light). The ceiling is *edge*, not liquidity.
-* **Honest verdict:** thin, parameter-sensitive, net-marginal — a viable
-  *component* of a diversified neutral book (esp. with a drift/momentum overlay),
-  not a standalone strategy. This is the **methodologically-corrected** hourly run;
-  turnover-control / profit tuning was deliberately *not* applied. See the report
-  for the full sensitivity/capacity analysis and roadmap.
+* **特质回归边际真实且巨大**(毛利 +$599k),但**市场中性的残差回归组合隐含做空特质动量**——
+  在 2023-25 牛市里做空高漂移名,会流失"样本内残差剔除掉、真实 β 对冲却剔除不了"的那部分漂移
+  (−$547k)。这个拖累比成本还大,是核心发现。
+* **方法学正确的小时频 ≈ 日频。** 用日历等价的 420-bar 窗口,持仓约 15 天、换手仅 6.2×/年——
+  **不是**朴素 60-小时-bar 跑出的 43×。边际/漂移/净值结构与日频一致(+$596k / −$561k / −$147k)。
+  更多 bar 给出更稳的统计,**不是一个不同的策略**。
+* **容量不是约束:** 夏普在 $10M→$200M 之间持平(成交额巨大、冲击轻)。天花板是*边际*,不是流动性。
+* **诚实判断:** 单薄、参数敏感、净值微负——是一个多元化中性组合里可用的*组件*(尤其配合
+  漂移/动量叠加),而非独立策略。这是**方法学修正版**的小时频跑法;换手控制/盈利向调优刻意**未**
+  施加。完整敏感性/容量分析与路线图见报告。
 
-## Roadmap (next steps)
+## 路线图(后续)
 
-* **Drift/momentum overlay** (implemented, see report §16.6): a signal-layer gate
-  that blocks shorting strongly up-trending names cuts the alpha-drift −$547k→−$329k
-  and flips the book net-positive (Sharpe −0.44→+0.37) — but the gain is partly a
-  2023-25 bull-market mirror effect (off by default; needs out-of-regime validation).
-* **Turnover control + profit tuning** (deliberately not applied here): higher
-  thresholds, wider no-trade band, maker fills, the net-positive 280-bar window.
-* OU s-score with κ-filter as primary signal; orthogonalised/PCA factors.
-* Dynamic factor selection (LASSO/stepwise); perp-vs-spot basis module.
+* **漂移/动量叠加**(已实现,见报告 §16.6):信号层门控,不做空强上涨名,把 alpha 漂移
+  −$547k→−$329k、策略翻成净值为正(夏普 −0.44→+0.37)——但增益部分是 2023-25 牛市的镜像效应
+  (默认关闭;需在多 regime 外验证)。
+* **换手控制 + 盈利向调优**(刻意未施加):更高阈值、更宽免交易带、maker 成交、净值翻正的 280-bar 窗口。
+* OU s-score + κ 过滤作为主信号;正交化 / PCA 因子。
+* 动态因子选择(LASSO/stepwise);永续-现货基差模块。
